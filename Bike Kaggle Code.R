@@ -7,16 +7,21 @@ library(patchwork)
 # read in data
 bike_data <- vroom("/Users/eliseclark/Documents/FALL 2025/STAT 348/BikeShareComp/bike-sharing-demand/train.csv")
 
-# change weather to a factor 
+# change variables into factors 
 bike_data <- bike_data %>%
-  mutate(weather = as.factor(weather), 
-         season = as.factor(season),
-         workingday = as.factor(workingday), 
+  mutate(workingday = as.factor(workingday), 
          holiday = as.factor(holiday))
 
 # look at variable types & num of obs
 glimpse(bike_data)
 
+# read in test data
+testData <- vroom("/Users/eliseclark/Documents/Fall 2025/Stat 348/BikeShareComp/bike-sharing-demand/test.csv")
+
+# set factors in test data 
+testData <- testData %>%
+  mutate(workingday = as.factor(workingday), 
+         holiday = as.factor(holiday))
 
 
 ######## EDA ##########
@@ -63,39 +68,72 @@ wind_plot <- ggplot(data = bike_data, aes(x = windspeed)) +
 
 # note that test dataset has 1 category 4 while training dataset does not 
 
-
-
-
-###### LINEAR REGRESSION ######
+###### CLEANING DATA ######
 
 # drop casual & registered from training dataset 
 bike_data <- bike_data %>% select(-casual, -registered)
 
-# read in test data
-testData <- vroom("/Users/eliseclark/Documents/Fall 2025/Stat 348/BikeShareComp/bike-sharing-demand/test.csv")
+# change cont to log (count)
+log_data <- bike_data %>% 
+                mutate(log_count = log(count))
+# drop count
+log_data <- log_data %>% select(-count)
 
-# set factors in test data 
-testData <- testData %>%
-  mutate(weather = as.factor(weather), 
-         season = as.factor(season),
-         workingday = as.factor(workingday), 
-         holiday = as.factor(holiday))
+# recipe
+bike_recipe <- recipe(log_count ~ . , data = log_data) %>%
+  step_mutate(weather = ifelse(weather == 4, 3, weather)) %>%
+  step_mutate(weather = as.factor(weather)) %>%
+  step_time(datetime, features= "hour") %>%
+  step_mutate(season = as.factor(season)) %>%
+  step_dummy(all_nominal_predictors())
 
-# linear model
-my_linear_model <- linear_reg() %>% #Type of model
-  set_engine("lm") %>% # Engine = What R function to use
-  set_mode("regression") %>% # Regression just means quantitative response
+prepped_recipe <- prep(bike_recipe)
+baked_data <- bake(prepped_recipe, new_data = log_data)
+
+glimpse(baked_data)
+
+###### LINEAR REGRESSION ######
+
+
+# linear model (1st set of predictions)
+my_linear_model <- linear_reg() %>% 
+  set_engine("lm") %>% 
+  set_mode("regression") %>% 
   fit(formula = count ~ . - datetime, data = bike_data)
 
 
-# predictions
+# linear model (2nd set of predictions)
+lin_model <- linear_reg() %>%
+  set_engine("lm") %>%
+  set_mode("regression")
+
+
+###### WORKFLOW ######
+bike_workflow <- workflow() %>%
+  add_recipe(bike_recipe) %>%
+  add_model(lin_model) %>%
+  fit(data = log_data)
+
+
+###### PREDICTIONS ######
+
+# 1st set of predictions
 bike_predictions <- predict(my_linear_model, new_data = testData)
 
 
-kaggle_submission <- bike_predictions %>%
+# 2nd set using workflow 
+lin_preds <- predict(bike_workflow, new_data = testData)
+
+# backtransform 2nd set of predictions
+lin_preds <- lin_preds %>%
+  mutate(count_pred = exp(.pred))
+
+
+# submit to kaggle (change code accordingly for prediction set)
+kaggle_submission <- lin_preds %>%
   bind_cols(., testData) %>% #Bind predictions with test data
-  select(datetime, .pred) %>% #Just keep datetime and prediction variables
-  rename(count = .pred) %>% #rename pred to count (for submission to Kaggle)
+  select(datetime, count_pred) %>% #Just keep datetime and prediction variables
+  rename(count = count_pred) %>% #rename(for submission to Kaggle)
   mutate(count = pmax(0, count)) %>% # pointwise max of (0, prediction)
   mutate(datetime=as.character(format(datetime))) #needed for right format to Kaggle
 
