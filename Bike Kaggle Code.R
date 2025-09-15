@@ -3,6 +3,7 @@ library(tidymodels)
 library(vroom)
 library(DataExplorer)
 library(patchwork)
+library(glmnet)
 
 # read in data
 bike_data <- vroom("/Users/eliseclark/Documents/FALL 2025/STAT 348/BikeShareComp/bike-sharing-demand/train.csv")
@@ -85,7 +86,8 @@ bike_recipe <- recipe(log_count ~ . , data = log_data) %>%
   step_mutate(weather = as.factor(weather)) %>%
   step_time(datetime, features= "hour") %>%
   step_mutate(season = as.factor(season)) %>%
-  step_dummy(all_nominal_predictors())
+  step_dummy(all_nominal_predictors()) %>%
+  step_normalize(all_numeric_predictors()) 
 
 prepped_recipe <- prep(bike_recipe)
 baked_data <- bake(prepped_recipe, new_data = log_data)
@@ -129,16 +131,52 @@ lin_preds <- lin_preds %>%
   mutate(count_pred = exp(.pred))
 
 
+
+###### PENALIZED REGRESSION MODELS ######
+
+
+# recipe
+pen_recipe <- recipe(log_count ~ . , data = log_data) %>%
+  step_mutate(weather = ifelse(weather == 4, 3, weather)) %>%
+  step_mutate(weather = as.factor(weather)) %>%
+  step_time(datetime, features= "hour") %>%
+  step_rm(datetime) %>%
+  step_mutate(season = as.factor(season)) %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_normalize(all_numeric_predictors()) 
+
+prepped_pen_recipe <- prep(pen_recipe)
+pen_data <- bake(prepped_pen_recipe, new_data = log_data)
+
+# model 
+pen_model <- linear_reg(penalty = 0, mixture = 0) %>% #Set model and tuning
+  set_engine("glmnet")  # Function to fit in R
+
+  
+# workflow  
+pen_workflow <- workflow() %>%
+    add_recipe(pen_recipe) %>%
+    add_model(pen_model) %>%
+    fit(data = log_data)
+  
+# predictions
+pen_preds<- predict(pen_workflow, new_data=testData)
+
+# back transform
+pen_preds <- pen_preds %>%
+  mutate(.pred = exp(.pred))
+
+
 # submit to kaggle (change code accordingly for prediction set)
-kaggle_submission <- lin_preds %>%
+kaggle_submission <- pen_preds %>%
   bind_cols(., testData) %>% #Bind predictions with test data
-  select(datetime, count_pred) %>% #Just keep datetime and prediction variables
-  rename(count = count_pred) %>% #rename(for submission to Kaggle)
-  mutate(count = pmax(0, count)) %>% # pointwise max of (0, prediction)
+  select(datetime, .pred) %>% #Just keep datetime and prediction variables
+  rename(count=.pred) %>% #rename pred to count (for submission to Kaggle)
+  mutate(count=pmax(0, count)) %>% #pointwise max of (0, prediction)
   mutate(datetime=as.character(format(datetime))) #needed for right format to Kaggle
 
 # write up file for kaggle
-vroom_write(x = kaggle_submission, file = "./LinearPreds.csv", delim=",")
+vroom_write(x = kaggle_submission, file = "./PenPreds5.csv", delim=",")
 
 
 
