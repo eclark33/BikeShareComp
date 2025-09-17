@@ -132,7 +132,7 @@ lin_preds <- lin_preds %>%
 
 
 
-###### PENALIZED REGRESSION MODELS ######
+###### PENALIZED REGRESSION MODEL ######
 
 
 # recipe
@@ -149,18 +149,50 @@ prepped_pen_recipe <- prep(pen_recipe)
 pen_data <- bake(prepped_pen_recipe, new_data = log_data)
 
 # model 
-pen_model <- linear_reg(penalty = 0, mixture = 0) %>% #Set model and tuning
-  set_engine("glmnet")  # Function to fit in R
+# for the 5 different sets of predictions, I just changed the parameters and re-ran my code 
+pen_model <- linear_reg(penalty = tune(), 
+                        mixture = tune()) %>% #Set model and tuning
+                      set_engine("glmnet")  # Function to fit in R
 
   
 # workflow  
 pen_workflow <- workflow() %>%
     add_recipe(pen_recipe) %>%
-    add_model(pen_model) %>%
-    fit(data = log_data)
+    add_model(pen_model)
+
+# grid of values to tune 
+grid_of_tuning_params <- grid_regular(penalty(),
+                              mixture(),
+                              levels = 5)
+
+# split data for cv & run it 
+folds <- vfold_cv(log_data, v = 5, repeats=1)
+
+CV_results <- pen_workflow %>%
+  tune_grid(resamples = folds,
+            grid = grid_of_tuning_params,
+            metrics = metric_set(rmse, mae))
+
+## Plot results
+collect_metrics(CV_results) %>% # Gathers metrics into DF
+  filter(.metric == "rmse") %>%
+  ggplot(data =., aes(x = penalty, y = mean, color = factor(mixture))) +
+  geom_line()
   
+# Find best tuning parameters
+bestTune <- CV_results %>%
+  select_best(metric = "rmse")
+
+## Finalize the workflow & fit it
+final_wf <- pen_workflow %>%
+  finalize_workflow(bestTune) %>%
+  fit(data = log_data) 
+
+## Predict
+pen_preds <- final_wf %>% predict(new_data = testData)
+
 # predictions
-pen_preds<- predict(pen_workflow, new_data=testData)
+#pen_preds<- predict(pen_workflow, new_data=testData)
 
 # back transform
 pen_preds <- pen_preds %>%
@@ -176,7 +208,7 @@ kaggle_submission <- pen_preds %>%
   mutate(datetime=as.character(format(datetime))) #needed for right format to Kaggle
 
 # write up file for kaggle
-vroom_write(x = kaggle_submission, file = "./PenPreds5.csv", delim=",")
+vroom_write(x = kaggle_submission, file = "./PenPredsCV.csv", delim=",")
 
 
 
