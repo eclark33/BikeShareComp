@@ -4,6 +4,7 @@ library(vroom)
 library(DataExplorer)
 library(patchwork)
 library(glmnet)
+library(rpart)
 
 # read in data
 bike_data <- vroom("/Users/eliseclark/Documents/FALL 2025/STAT 348/BikeShareComp/bike-sharing-demand/train.csv")
@@ -135,6 +136,9 @@ lin_preds <- lin_preds %>%
 ###### PENALIZED REGRESSION MODEL ######
 
 
+# Fix grid code 
+
+
 # recipe
 pen_recipe <- recipe(log_count ~ . , data = log_data) %>%
   step_mutate(weather = ifelse(weather == 4, 3, weather)) %>%
@@ -153,7 +157,6 @@ pen_data <- bake(prepped_pen_recipe, new_data = log_data)
 pen_model <- linear_reg(penalty = tune(), 
                         mixture = tune()) %>% #Set model and tuning
                       set_engine("glmnet")  # Function to fit in R
-
   
 # workflow  
 pen_workflow <- workflow() %>%
@@ -173,34 +176,99 @@ CV_results <- pen_workflow %>%
             grid = grid_of_tuning_params,
             metrics = metric_set(rmse, mae))
 
-## Plot results
+## plot results
 collect_metrics(CV_results) %>% # Gathers metrics into DF
   filter(.metric == "rmse") %>%
   ggplot(data =., aes(x = penalty, y = mean, color = factor(mixture))) +
   geom_line()
   
-# Find best tuning parameters
+# find best tuning parameters
 bestTune <- CV_results %>%
   select_best(metric = "rmse")
 
-## Finalize the workflow & fit it
+## finalize the workflow & fit 
 final_wf <- pen_workflow %>%
   finalize_workflow(bestTune) %>%
   fit(data = log_data) 
 
-## Predict
+## predictions
 pen_preds <- final_wf %>% predict(new_data = testData)
-
-# predictions
-#pen_preds<- predict(pen_workflow, new_data=testData)
 
 # back transform
 pen_preds <- pen_preds %>%
   mutate(.pred = exp(.pred))
 
 
+
+
+
+###### TREE MODEL ######
+
+tree_mod <- decision_tree(tree_depth = tune(),
+                          cost_complexity = tune(),
+                          min_n=tune()) %>% #Type of model
+  set_engine("rpart") %>% # What R function to use
+  set_mode("regression")
+
+
+tree_recipe <- recipe(log_count ~ . , data = log_data) %>%
+  step_mutate(weather = ifelse(weather == 4, 3, weather)) %>%
+  step_mutate(weather = as.factor(weather)) %>%
+  step_time(datetime, features= "hour") %>%
+  step_rm(datetime) %>%
+  step_mutate(season = as.factor(season)) %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_normalize(all_numeric_predictors()) 
+
+prepped_tree_recipe <- prep(tree_recipe)
+tree_data <- bake(prepped_tree_recipe, new_data = log_data)
+
+
+# workflow  
+tree_workflow <- workflow() %>%
+  add_recipe(tree_recipe) %>%
+  add_model(tree_mod)
+
+# grid of values to tune 
+grid_of_tuning_params <- grid_regular(cost_complexity(),
+                                      tree_depth(),
+                                      min_n(),
+                                      levels = 3)
+
+# split data for cv & run it 
+folds <- vfold_cv(log_data, v = 5, repeats=1)
+
+CV_results <- tree_workflow %>%
+  tune_grid(resamples = folds,
+            grid = grid_of_tuning_params,
+            metrics = metric_set(rmse, mae))
+
+
+
+# find best tuning parameters
+bestTune <- CV_results %>%
+  select_best(metric = "rmse")
+
+## finalize the workflow & fit 
+final_wf <- tree_workflow %>%
+  finalize_workflow(bestTune) %>%
+  fit(data = log_data) 
+
+## predictions
+tree_preds <- final_wf %>% predict(new_data = testData)
+
+# back transform
+tree_preds <- tree_preds %>%
+  mutate(.pred = exp(.pred))
+
+
+
+
+
+
+
 # submit to kaggle (change code accordingly for prediction set)
-kaggle_submission <- pen_preds %>%
+kaggle_submission <- tree_preds %>%
   bind_cols(., testData) %>% #Bind predictions with test data
   select(datetime, .pred) %>% #Just keep datetime and prediction variables
   rename(count=.pred) %>% #rename pred to count (for submission to Kaggle)
@@ -208,7 +276,7 @@ kaggle_submission <- pen_preds %>%
   mutate(datetime=as.character(format(datetime))) #needed for right format to Kaggle
 
 # write up file for kaggle
-vroom_write(x = kaggle_submission, file = "./PenPredsCV.csv", delim=",")
+vroom_write(x = kaggle_submission, file = "./TreePredsCV.csv", delim=",")
 
 
 
