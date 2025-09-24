@@ -6,6 +6,9 @@ library(patchwork)
 library(glmnet)
 library(rpart)
 library(ranger)
+library(bonsai)
+library(lightgbm)
+library(dbarts)
 
 # read in data
 bike_data <- vroom("/Users/eliseclark/Documents/FALL 2025/STAT 348/BikeShareComp/bike-sharing-demand/train.csv")
@@ -327,10 +330,72 @@ forest_preds <- forest_preds %>%
 
 
 
+###### BART MODEL #######
+
+# BART model
+bart_mod <- parsnip::bart(mode = "regression") %>%
+  set_engine("dbarts") %>%
+  set_args(
+    trees = tune())
+
+
+# bart recipe
+bart_recipe <- recipe(log_count ~ . , data = log_data) %>%
+  step_mutate(weather = ifelse(weather == 4, 3, weather)) %>%
+  step_mutate(weather = as.factor(weather)) %>%
+  step_time(datetime, features= "hour") %>%
+  step_rm(datetime) %>%
+  step_mutate(season = as.factor(season)) %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_normalize(all_numeric_predictors()) 
+
+prepped_bart_recipe <- prep(bart_recipe)
+bart_data <- bake(prepped_bart_recipe, new_data = log_data)
+
+
+# workflow  
+bart_workflow <- workflow() %>%
+  add_recipe(bart_recipe) %>%
+  add_model(bart_mod)
+
+# grid of values to tune 
+grid_of_tuning_params <- grid_regular(
+  trees(range = c(50, 100)),
+  levels = 5)
+
+
+# split data for cv & run it 
+folds <- vfold_cv(log_data, v = 5, repeats=1)
+
+CV_results <- bart_workflow %>%
+  tune_grid(resamples = folds,
+            grid = grid_of_tuning_params,
+            metrics = metric_set(rmse, mae))
+
+
+
+# find best tuning parameters
+bestTune <- CV_results %>%
+  select_best(metric = "rmse")
+
+## finalize the workflow & fit 
+final_wf <- bart_workflow %>%
+  finalize_workflow(bestTune) %>%
+  fit(data = log_data) 
+
+## predictions
+bart_preds <- final_wf %>% predict(new_data = testData)
+
+# back transform
+bart_preds <- bart_preds %>%
+  mutate(.pred = exp(.pred))
+
+
+
 
 
 # submit to kaggle (change code accordingly for prediction set)
-kaggle_submission <- forest_preds %>%
+kaggle_submission <- bart_preds %>%
   bind_cols(., testData) %>% #Bind predictions with test data
   select(datetime, .pred) %>% #Just keep datetime and prediction variables
   rename(count=.pred) %>% #rename pred to count (for submission to Kaggle)
@@ -338,8 +403,7 @@ kaggle_submission <- forest_preds %>%
   mutate(datetime=as.character(format(datetime))) #needed for right format to Kaggle
 
 # write up file for kaggle
-vroom_write(x = kaggle_submission, file = "./ForestPredsCV.csv", delim=",")
-
+vroom_write(x = kaggle_submission, file = "./BARTPredsCV.csv", delim=",")
 
 
 
