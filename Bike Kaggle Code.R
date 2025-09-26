@@ -9,6 +9,7 @@ library(ranger)
 library(bonsai)
 library(lightgbm)
 library(dbarts)
+library(agua)
 
 # read in data
 bike_data <- vroom("/Users/eliseclark/Documents/FALL 2025/STAT 348/BikeShareComp/bike-sharing-demand/train.csv")
@@ -20,6 +21,7 @@ bike_data <- bike_data %>%
 
 # look at variable types & num of obs
 glimpse(bike_data)
+
 
 # read in test data
 testData <- vroom("/Users/eliseclark/Documents/Fall 2025/Stat 348/BikeShareComp/bike-sharing-demand/test.csv")
@@ -349,6 +351,7 @@ bart_recipe <- recipe(log_count ~ . , data = log_data) %>%
   step_dummy(all_nominal_predictors()) %>%
   step_normalize(all_numeric_predictors()) 
 
+
 prepped_bart_recipe <- prep(bart_recipe)
 bart_data <- bake(prepped_bart_recipe, new_data = log_data)
 
@@ -388,6 +391,41 @@ bart_preds <- final_wf %>% predict(new_data = testData)
 
 # back transform
 bart_preds <- bart_preds %>%
+  mutate(.pred = exp(.pred))
+
+
+
+###### META LEARNER MODEL ######
+h2o::h2o.init()
+
+auto_model <- auto_ml() %>%
+  set_engine("h2o", max_runtime_secs = 180, max_models = 25) %>%
+  set_mode("regression")
+
+
+meta_recipe <- recipe(log_count ~ . , data = log_data) %>%
+  step_mutate(weather = ifelse(weather == 4, 3, weather)) %>%
+  step_mutate(weather = as.factor(weather)) %>%
+  step_time(datetime, features= "hour") %>%
+  step_rm(datetime) %>%
+  step_mutate(season = as.factor(season)) %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_normalize(all_numeric_predictors()) 
+
+prepped_meta_recipe <- prep(meta_recipe)
+meta_data <- bake(prepped_meta_recipe, new_data = log_data)
+
+automl_wf <- workflow() %>%
+  add_recipe(meta_recipe) %>%
+  add_model(auto_model) %>%
+  fit(data = log_data)
+
+
+## predictions
+meta_preds <- automl_wf %>% predict(new_data = testData)
+
+# back transform
+meta_preds <- meta_preds %>%
   mutate(.pred = exp(.pred))
 
 
