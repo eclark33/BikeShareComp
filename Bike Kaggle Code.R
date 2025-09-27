@@ -338,14 +338,15 @@ forest_preds <- forest_preds %>%
 bart_mod <- parsnip::bart(mode = "regression") %>%
   set_engine("dbarts") %>%
   set_args(
-    trees = tune())
+    trees = tune())  
 
 
 # bart recipe
 bart_recipe <- recipe(log_count ~ . , data = log_data) %>%
   step_mutate(weather = ifelse(weather == 4, 3, weather)) %>%
   step_mutate(weather = as.factor(weather)) %>%
-  step_time(datetime, features= "hour") %>%
+  step_time(datetime, features = ("hour")) %>% #create time variable
+  step_date(datetime, features = "dow") %>% # gets day of week
   step_rm(datetime) %>%
   step_mutate(season = as.factor(season)) %>%
   step_dummy(all_nominal_predictors()) %>%
@@ -443,7 +444,6 @@ kaggle_submission <- bart_preds %>%
 # write up file for kaggle
 vroom_write(x = kaggle_submission, file = "./BARTPredsCV.csv", delim=",")
 
-#change
 
 
 
