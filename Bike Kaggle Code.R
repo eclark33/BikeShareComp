@@ -97,9 +97,18 @@ bike_recipe <- recipe(log_count ~ . , data = log_data) %>%
   step_normalize(all_numeric_predictors()) 
 
 prepped_recipe <- prep(bike_recipe)
+
 baked_data <- bake(prepped_recipe, new_data = log_data)
 
+baked_data <- baked_data %>%
+  mutate(count = exp(log_count))
+
 glimpse(baked_data)
+
+
+vroom_write(x = baked_data, file = "/Users/eliseclark/Documents/Fall 2025/Stat 348/baked_data.csv", delim=",")
+
+
 
 ###### LINEAR REGRESSION ######
 
@@ -347,10 +356,12 @@ bart_recipe <- recipe(log_count ~ . , data = log_data) %>%
   step_mutate(weather = as.factor(weather)) %>%
   step_time(datetime, features = ("hour")) %>% #create time variable
   step_date(datetime, features = "dow") %>% # gets day of week
+  step_date(datetime, features = "month") %>%
+  step_date(datetime, features = "year") %>%
   step_rm(datetime) %>%
   step_mutate(season = as.factor(season)) %>%
   step_dummy(all_nominal_predictors()) %>%
-  step_normalize(all_numeric_predictors()) 
+  step_zv(all_predictors()) #removes zero-variance predictors
 
 
 prepped_bart_recipe <- prep(bart_recipe)
@@ -364,7 +375,7 @@ bart_workflow <- workflow() %>%
 
 # grid of values to tune 
 grid_of_tuning_params <- grid_regular(
-  trees(range = c(50, 100)),
+  trees(range = c(50, 300)),
   levels = 5)
 
 
@@ -431,18 +442,24 @@ meta_preds <- meta_preds %>%
 
 
 
+###### DATAROBOT PREDICTIONS ######
 
+databot_preds <- vroom("/Users/eliseclark/Downloads/datarobot_preds.csv")
+
+# back transform? 
+databot_preds <- databot_preds %>%
+  mutate(count_PREDICTION = exp(count_PREDICTION))
 
 # submit to kaggle (change code accordingly for prediction set)
-kaggle_submission <- bart_preds %>%
+kaggle_submission <- databot_preds %>%
   bind_cols(., testData) %>% #Bind predictions with test data
-  select(datetime, .pred) %>% #Just keep datetime and prediction variables
-  rename(count=.pred) %>% #rename pred to count (for submission to Kaggle)
+  select(datetime, count_PREDICTION) %>% #Just keep datetime and prediction variables
+  rename(count= count_PREDICTION) %>% #rename pred to count (for submission to Kaggle)
   mutate(count=pmax(0, count)) %>% #pointwise max of (0, prediction)
   mutate(datetime=as.character(format(datetime))) #needed for right format to Kaggle
 
 # write up file for kaggle
-vroom_write(x = kaggle_submission, file = "./BARTPredsCV.csv", delim=",")
+vroom_write(x = kaggle_submission, file = "/Users/eliseclark/Documents/Fall 2025/Stat 348/databotPredsCV.csv", delim=",")
 
 
 
